@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
+import { Html5Qrcode } from "html5-qrcode";
 
 const API_BASE_URL = "http://localhost:8082";
 
@@ -30,6 +31,22 @@ function App() {
   const [showTransactionHistory, setShowTransactionHistory] = useState(false);
   const [selectedItemForHistory, setSelectedItemForHistory] = useState(null);
   const [itemTransactions, setItemTransactions] = useState([]);
+
+  // Barcode scanner states
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannerError, setScannerError] = useState(null);
+  const [scannedItem, setScannedItem] = useState(null);
+  const [showScannedItemCard, setShowScannedItemCard] = useState(false);
+  const scannerRef = useRef(null);
+  const html5QrCodeRef = useRef(null);
+
+  // Edit/Delete states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingItem, setDeletingItem] = useState(null);
+  const [showStoreEditModal, setShowStoreEditModal] = useState(false);
+  const [editingStore, setEditingStore] = useState(null);
 
   const handleFetchError = async (res) => {
     const text = await res.text();
@@ -258,6 +275,231 @@ function App() {
     setItemTransactions([]);
   };
 
+  // Edit Item Functions
+  const openEditModal = (item) => {
+    setEditingItem({...item});
+    setShowEditModal(true);
+  };
+
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setEditingItem(null);
+  };
+
+  const handleUpdateItem = async () => {
+    if (!editingItem) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/items/${editingItem.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingItem),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        alert(`Error: ${text}`);
+        return;
+      }
+
+      setStatusMessage("Item updated successfully");
+      closeEditModal();
+      
+      if (selectedStoreId) {
+        await fetchItemsForStore(selectedStoreId);
+        await fetchReorderList(selectedStoreId);
+      }
+    } catch (err) {
+      console.error("Failed to update item", err);
+      alert("Network error while updating item");
+    }
+  };
+
+  // Delete Item Functions
+  const openDeleteConfirm = (item) => {
+    setDeletingItem(item);
+    setShowDeleteConfirm(true);
+  };
+
+  const closeDeleteConfirm = () => {
+    setShowDeleteConfirm(false);
+    setDeletingItem(null);
+  };
+
+  const handleDeleteItem = async () => {
+    if (!deletingItem) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/items/${deletingItem.id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        alert(`Error: ${text}`);
+        return;
+      }
+
+      setStatusMessage("Item deleted successfully");
+      closeDeleteConfirm();
+      
+      if (selectedStoreId) {
+        await fetchItemsForStore(selectedStoreId);
+        await fetchReorderList(selectedStoreId);
+        await fetchStoreTransactions(selectedStoreId);
+      }
+    } catch (err) {
+      console.error("Failed to delete item", err);
+      alert("Network error while deleting item");
+    }
+  };
+
+  // Edit Store Functions
+  const openStoreEditModal = (store) => {
+    setEditingStore({...store});
+    setShowStoreEditModal(true);
+  };
+
+  const closeStoreEditModal = () => {
+    setShowStoreEditModal(false);
+    setEditingStore(null);
+  };
+
+  const handleUpdateStore = async () => {
+    if (!editingStore) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/stores/${editingStore.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingStore),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        alert(`Error: ${text}`);
+        return;
+      }
+
+      setStatusMessage("Store updated successfully");
+      closeStoreEditModal();
+      await fetchStores();
+    } catch (err) {
+      console.error("Failed to update store", err);
+      alert("Network error while updating store");
+    }
+  };
+
+  const handleDeleteStore = async (storeId) => {
+    if (!window.confirm("Are you sure you want to delete this store? This will fail if the store has items.")) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/stores/${storeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        alert(`Error: ${text}`);
+        return;
+      }
+
+      setStatusMessage("Store deleted successfully");
+      setSelectedStoreId(null);
+      await fetchStores();
+    } catch (err) {
+      console.error("Failed to delete store", err);
+      alert("Network error while deleting store");
+    }
+  };
+
+  // Barcode Scanner Functions
+  const startScanner = async () => {
+    if (!selectedStoreId) {
+      alert("Please select a store first");
+      return;
+    }
+
+    setShowScanner(true);
+    setScannerError(null);
+    
+    try {
+      const html5QrCode = new Html5Qrcode("barcode-scanner");
+      html5QrCodeRef.current = html5QrCode;
+
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+        },
+        onScanSuccess,
+        onScanError
+      );
+    } catch (err) {
+      console.error("Scanner start error:", err);
+      setScannerError("Failed to start camera. Please check permissions.");
+    }
+  };
+
+  const stopScanner = async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        await html5QrCodeRef.current.stop();
+        html5QrCodeRef.current.clear();
+        html5QrCodeRef.current = null;
+      } catch (err) {
+        console.error("Error stopping scanner:", err);
+      }
+    }
+    setShowScanner(false);
+    setScannerError(null);
+  };
+
+  const onScanSuccess = async (decodedText, decodedResult) => {
+    console.log("Barcode scanned:", decodedText);
+    
+    await stopScanner();
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/stores/${selectedStoreId}/items/by-barcode/${decodedText}`
+      );
+      
+      if (res.ok) {
+        const item = await res.json();
+        setScannedItem(item);
+        setShowScannedItemCard(true);
+      } else {
+        alert(`Item with barcode "${decodedText}" not found in this store`);
+      }
+    } catch (err) {
+      console.error("Error looking up barcode:", err);
+      alert("Error looking up item");
+    }
+  };
+
+  const onScanError = (errorMessage) => {
+    // Ignore frequent scan errors
+  };
+
+  const closeScannedItemCard = () => {
+    setShowScannedItemCard(false);
+    setScannedItem(null);
+  };
+
+  const handleScannedItemAdjustStock = () => {
+    closeScannedItemCard();
+    openStockModal(scannedItem);
+  };
+
+  const handleScannedItemViewHistory = async () => {
+    closeScannedItemCard();
+    await openTransactionHistory(scannedItem);
+  };
+
   useEffect(() => {
     fetchStores();
   }, []);
@@ -352,23 +594,76 @@ function App() {
           <p>No stores found. Use the form above to add one.</p>
         ) : (
           <div>
-            <label>
-              Select store:{" "}
-              <select
-                value={selectedStoreId ?? ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedStoreId(val ? Number(val) : null);
+            <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1rem" }}>
+              <label>
+                Select store:{" "}
+                <select
+                  value={selectedStoreId ?? ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedStoreId(val ? Number(val) : null);
+                  }}
+                >
+                  <option value="">-- Select --</option>
+                  {stores.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (#{s.id})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              
+              <button
+                onClick={startScanner}
+                disabled={!selectedStoreId}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: "#007bff",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: selectedStoreId ? "pointer" : "not-allowed",
+                  opacity: selectedStoreId ? 1 : 0.5,
                 }}
               >
-                <option value="">-- Select --</option>
-                {stores.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} (#{s.id})
-                  </option>
-                ))}
-              </select>
-            </label>
+                📱 Scan Barcode
+              </button>
+            </div>
+
+            {/* Store Edit/Delete Buttons */}
+            {selectedStoreId && (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  onClick={() => {
+                    const store = stores.find(s => s.id === selectedStoreId);
+                    if (store) openStoreEditModal(store);
+                  }}
+                  style={{
+                    padding: "0.4rem 0.8rem",
+                    background: "#ffc107",
+                    color: "#000",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  ✏️ Edit Store
+                </button>
+                <button
+                  onClick={() => handleDeleteStore(selectedStoreId)}
+                  style={{
+                    padding: "0.4rem 0.8rem",
+                    background: "#dc3545",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                >
+                  🗑️ Delete Store
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -496,15 +791,59 @@ function App() {
                       style={{
                         marginRight: "0.5rem",
                         padding: "0.25rem 0.5rem",
+                        background: "#007bff",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
                       }}
                     >
-                      Adjust Stock
+                      Adjust
                     </button>
                     <button
                       onClick={() => openTransactionHistory(item)}
-                      style={{ padding: "0.25rem 0.5rem" }}
+                      style={{
+                        marginRight: "0.5rem",
+                        padding: "0.25rem 0.5rem",
+                        background: "#28a745",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                      }}
                     >
                       History
+                    </button>
+                    <button
+                      onClick={() => openEditModal(item)}
+                      style={{
+                        marginRight: "0.5rem",
+                        padding: "0.25rem 0.5rem",
+                        background: "#ffc107",
+                        color: "#000",
+                        border: "none",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => openDeleteConfirm(item)}
+                      style={{
+                        padding: "0.25rem 0.5rem",
+                        background: "#dc3545",
+                        color: "white",
+                        border: "none",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      Delete
                     </button>
                   </td>
                 </tr>
@@ -603,6 +942,524 @@ function App() {
           </table>
         )}
       </section>
+
+      {/* Edit Item Modal */}
+      {showEditModal && editingItem && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={closeEditModal}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: "2rem",
+              borderRadius: 8,
+              maxWidth: 500,
+              width: "90%",
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Edit Item: {editingItem.name}</h2>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Name:
+                <input
+                  type="text"
+                  value={editingItem.name}
+                  onChange={(e) => setEditingItem({...editingItem, name: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                SKU:
+                <input
+                  type="text"
+                  value={editingItem.sku || ""}
+                  onChange={(e) => setEditingItem({...editingItem, sku: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Barcode:
+                <input
+                  type="text"
+                  value={editingItem.barcode || ""}
+                  onChange={(e) => setEditingItem({...editingItem, barcode: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Unit:
+                <input
+                  type="text"
+                  value={editingItem.unit || ""}
+                  onChange={(e) => setEditingItem({...editingItem, unit: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Current Stock:
+                <input
+                  type="number"
+                  value={editingItem.currentStock}
+                  onChange={(e) => setEditingItem({...editingItem, currentStock: Number(e.target.value)})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Reorder Level:
+                <input
+                  type="number"
+                  value={editingItem.reorderLevel}
+                  onChange={(e) => setEditingItem({...editingItem, reorderLevel: Number(e.target.value)})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Target Stock:
+                <input
+                  type="number"
+                  value={editingItem.targetStock}
+                  onChange={(e) => setEditingItem({...editingItem, targetStock: Number(e.target.value)})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                onClick={handleUpdateItem}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Save Changes
+              </button>
+              <button
+                onClick={closeEditModal}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#6c757d",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && deletingItem && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={closeDeleteConfirm}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: "2rem",
+              borderRadius: 8,
+              maxWidth: 400,
+              width: "90%",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Delete Item?</h2>
+            <p>
+              Are you sure you want to delete <strong>{deletingItem.name}</strong>?
+            </p>
+            <p style={{ color: "#dc3545", fontSize: "0.9rem" }}>
+              This action cannot be undone. All transaction history for this item will be preserved.
+            </p>
+
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "1.5rem" }}>
+              <button
+                onClick={handleDeleteItem}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#dc3545",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Yes, Delete
+              </button>
+              <button
+                onClick={closeDeleteConfirm}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#6c757d",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Store Modal */}
+      {showStoreEditModal && editingStore && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={closeStoreEditModal}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: "2rem",
+              borderRadius: 8,
+              maxWidth: 500,
+              width: "90%",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Edit Store</h2>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Store Name:
+                <input
+                  type="text"
+                  value={editingStore.name}
+                  onChange={(e) => setEditingStore({...editingStore, name: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem" }}>
+                Location:
+                <input
+                  type="text"
+                  value={editingStore.location || ""}
+                  onChange={(e) => setEditingStore({...editingStore, location: e.target.value})}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    marginTop: "0.25rem",
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                onClick={handleUpdateStore}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Save Changes
+              </button>
+              <button
+                onClick={closeStoreEditModal}
+                style={{
+                  flex: 1,
+                  padding: "0.75rem",
+                  background: "#6c757d",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* [Previous modals: Scanner, Scanned Item Card, Stock Adjustment, Transaction History - keeping all the same] */}
+      {/* Barcode Scanner Modal */}
+      {showScanner && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+          onClick={stopScanner}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: "2rem",
+              borderRadius: 8,
+              maxWidth: 600,
+              width: "90%",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Scan Barcode</h2>
+            <p>Point your camera at the item barcode</p>
+
+            {scannerError && (
+              <div style={{ 
+                background: "#ffe5e5", 
+                color: "#900", 
+                padding: "0.75rem", 
+                marginBottom: "1rem",
+                borderRadius: 4 
+              }}>
+                {scannerError}
+              </div>
+            )}
+
+            <div
+              id="barcode-scanner"
+              style={{
+                width: "100%",
+                maxWidth: "500px",
+                margin: "1rem auto",
+                border: "2px solid #ddd",
+                borderRadius: 8,
+              }}
+            ></div>
+
+            <button
+              onClick={stopScanner}
+              style={{
+                width: "100%",
+                padding: "0.75rem",
+                background: "#6c757d",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+                marginTop: "1rem",
+              }}
+            >
+              Close Scanner
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Scanned Item Details Card */}
+      {showScannedItemCard && scannedItem && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+          onClick={closeScannedItemCard}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: "2rem",
+              borderRadius: 8,
+              maxWidth: 500,
+              width: "90%",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>Item Found! 🎉</h2>
+            
+            <div style={{ 
+              background: "#f8f9fa", 
+              padding: "1rem", 
+              borderRadius: 4,
+              marginBottom: "1.5rem" 
+            }}>
+              <h3 style={{ marginTop: 0 }}>{scannedItem.name}</h3>
+              <p style={{ margin: "0.5rem 0" }}>
+                <strong>Barcode:</strong> {scannedItem.barcode}
+              </p>
+              <p style={{ margin: "0.5rem 0" }}>
+                <strong>Current Stock:</strong> {scannedItem.currentStock}
+              </p>
+              <p style={{ margin: "0.5rem 0" }}>
+                <strong>Target Stock:</strong> {scannedItem.targetStock}
+              </p>
+              {scannedItem.sku && (
+                <p style={{ margin: "0.5rem 0" }}>
+                  <strong>SKU:</strong> {scannedItem.sku}
+                </p>
+              )}
+            </div>
+
+            <p style={{ marginBottom: "1rem", color: "#666" }}>
+              What would you like to do?
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              <button
+                onClick={handleScannedItemAdjustStock}
+                style={{
+                  padding: "0.75rem",
+                  background: "#007bff",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  fontSize: "1rem",
+                }}
+              >
+                📦 Adjust Stock
+              </button>
+              <button
+                onClick={handleScannedItemViewHistory}
+                style={{
+                  padding: "0.75rem",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  fontSize: "1rem",
+                }}
+              >
+                📊 View Transaction History
+              </button>
+              <button
+                onClick={closeScannedItemCard}
+                style={{
+                  padding: "0.75rem",
+                  background: "#6c757d",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  fontSize: "1rem",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stock Adjustment Modal */}
       {showModal && selectedItem && (
